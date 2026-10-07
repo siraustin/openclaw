@@ -750,6 +750,7 @@ extension GatewayChannelActor {
                 "operator.approvals",
                 "operator.questions",
                 "operator.read",
+                "operator.talk",
                 "operator.talk.secrets",
                 "operator.write",
             ]
