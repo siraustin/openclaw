@@ -33,6 +33,28 @@ public final nonisolated class RealtimePCMStreamingAudioPlayer: PCMStreamingAudi
     private var playbackContinuation: AsyncStream<StreamingPlaybackResult>.Continuation?
     private var inputTask: Task<Void, Never>?
     private var inputFinished = false
+    private var gain: Float = 1
+
+    /// Software gain applied to every PCM16 frame before scheduling (clipped at full scale).
+    /// Voice-processing audio sessions attenuate the built-in speaker; a 2x boost restores it.
+    public var outputGain: Float {
+        get { self.lock.withLock { self.gain } }
+        set { self.lock.withLock { self.gain = max(0, newValue) } }
+    }
+
+    private func applyGain(_ frame: Data) -> Data {
+        let gain = self.outputGain
+        guard gain != 1 else { return frame }
+        var out = frame
+        out.withUnsafeMutableBytes { raw in
+            let samples = raw.bindMemory(to: Int16.self)
+            for index in samples.indices {
+                let scaled = (Float(samples[index]) * gain).rounded()
+                samples[index] = Int16(min(max(scaled, -32768), 32767))
+            }
+        }
+        return out
+    }
 
     public convenience init() {
         let engine = AVAudioEngine()
@@ -184,7 +206,7 @@ public final nonisolated class RealtimePCMStreamingAudioPlayer: PCMStreamingAudi
                 try Task.checkCancellation()
                 pending.append(chunk)
                 while pending.count >= frameBytes {
-                    let frame = Data(pending.prefix(frameBytes))
+                    let frame = self.applyGain(Data(pending.prefix(frameBytes)))
                     pending.removeFirst(frameBytes)
                     guard await self.schedule(frame: frame, sampleRate: sampleRate, generation: generation)
                     else { return }
@@ -192,7 +214,7 @@ public final nonisolated class RealtimePCMStreamingAudioPlayer: PCMStreamingAudi
             }
             if !pending.isEmpty {
                 pending.append(Data(repeating: 0, count: frameBytes - pending.count))
-                guard await self.schedule(frame: pending, sampleRate: sampleRate, generation: generation)
+                guard await self.schedule(frame: self.applyGain(pending), sampleRate: sampleRate, generation: generation)
                 else { return }
             }
             self.backendQueue.async { [weak self] in
